@@ -1,5 +1,4 @@
-# Code for:
-### *Hydrograph peak-shaving using a graph-theoretic algorithm for placement of hydraulic control structures*
+## *Hydrograph peak-shaving using a graph-theoretic algorithm for placement of hydraulic control structures*
 
 Preprint available at: https://arxiv.org/abs/1809.03838
 
