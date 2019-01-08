@@ -290,13 +290,13 @@ class SwmmIngester(object):
                                   'mannings_n', 'inlet_offset', 'outlet_offset',
                                   'init_flow', 'max_flow']]
 
-    def generate_channel_dims(self, a=7.2, b=0.5, c=0.5, f=0.3, d_offset=1.1, w_offset=0.3,
+    def generate_channel_dims(self, a=7.2, b=0.5, c=0.5, f=0.3, d_offset=1.1, w_offset=1.3,
                      d_scale=1/5000, w_scale=1/5000, **kwargs):
         # From here: http://onlinelibrary.wiley.com/doi/10.1002/wrcr.20440/full
         channel_w = self.grid.view(self.acc).copy()
         channel_d = self.grid.view(self.acc).copy()
-        channel_w = (a*(w_scale * channel_w)**b) + w_offset
-        channel_d = (c*(d_scale * channel_d)**f) + d_offset
+        channel_w = 1.5*(a*(w_scale * channel_w)**b) + w_offset
+        channel_d = 1.5*(c*(d_scale * channel_d)**f) + d_offset
         self.channel_w = channel_w
         self.channel_d = channel_d
 
@@ -304,8 +304,8 @@ class SwmmIngester(object):
         xsections = {}
         xsections['link'] = self.conduits['name'].iloc[:-1]
         xsections['shape'] = pd.Series(np.repeat('RECT_OPEN', len(self.startnodes)))
-        xsections['geom_1'] = pd.Series(self.channel_w.flat[self.startnodes])
-        xsections['geom_2'] = pd.Series(self.channel_d.flat[self.startnodes])
+        xsections['geom_1'] = pd.Series(self.channel_d.flat[self.startnodes])
+        xsections['geom_2'] = pd.Series(self.channel_w.flat[self.startnodes])
         xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
         xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
         xsections['barrels'] = pd.Series(np.repeat(1, len(self.startnodes)))
@@ -411,8 +411,8 @@ class SwmmIngester(object):
         coordinates = {}
         coordinates['node'] = pd.concat([self.junctions['name'], self.storage['name']])
         coord_ix = coordinates['node'].str.extract('(\d+)').astype(int).values
-        coordinates['x_coord'] = np.unravel_index(coord_ix, self.grid.shape)[1]
-        coordinates['y_coord'] = np.unravel_index(coord_ix, self.grid.shape)[0]
+        coordinates['x_coord'] = np.unravel_index(coord_ix, self.grid.shape)[1].ravel()
+        coordinates['y_coord'] = np.unravel_index(coord_ix, self.grid.shape)[0].ravel()
         coordinates = pd.DataFrame.from_dict(coordinates)
         # Manual overrides
         for key, value in kwargs.items():
