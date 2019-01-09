@@ -120,11 +120,11 @@ class SwmmIngester(object):
             "DRY_STEP" : "00:05:00",
             "ROUTING_STEP" : "5",
             "ALLOW_PONDING" : "YES",
-            "INERTIAL_DAMPING" : "NONE",
+            "INERTIAL_DAMPING" : "PARTIAL",
             "VARIABLE_STEP" : "0.75",
-            "LENGTHENING_STEP" : "5",
-            "MIN_SURFAREA" : "0",
-            "NORMAL_FLOW_LIMITED" : "SLOPE",
+            "LENGTHENING_STEP" : "0",
+            "MIN_SURFAREA" : "1.167",
+            "NORMAL_FLOW_LIMITED" : "BOTH",
             "SKIP_STEADY_STATE" : "NO",
             "FORCE_MAIN_EQUATION" : "H-W",
             "LINK_OFFSETS" : "DEPTH",
@@ -132,11 +132,11 @@ class SwmmIngester(object):
             "IGNORE_SNOWMELT" : "YES",
             "IGNORE_GROUNDWATER" : "YES",
             "MAX_TRIALS" : "8",
-            "HEAD_TOLERANCE" : "0.005",
+            "HEAD_TOLERANCE" : "0.0015",
             "SYS_FLOW_TOL" : "5",
             "LAT_FLOW_TOL" : "5",
             "MINIMUM_STEP" : "0.5",
-            "THREADS" : "1",
+            "THREADS" : "2",
         }
         # Manual overrides
         for key, value in kwargs.items():
@@ -187,7 +187,7 @@ class SwmmIngester(object):
         subcatchments['outlet'] = 'J' + pd.Series(self.nodes).astype(str)
         # TODO: Assuming hectares
         subcatchments['total_area'] = (self.total_areas).values
-        subcatchments['pct_imperv'] = pd.Series(np.repeat(100, len(self.nodes)))
+        subcatchments['pct_imperv'] = pd.Series(np.repeat(36, len(self.nodes)))
         subcatchments['width'] = self.widths.values
         subcatchments['pct_slope'] = self.pct_slopes.values
         subcatchments['curb_length'] = pd.Series(np.repeat(0, len(self.nodes)))
@@ -226,9 +226,9 @@ class SwmmIngester(object):
     def generate_infiltration(self, **kwargs):
         infiltration = {}
         infiltration['subcatchment'] = 'S' + pd.Series(self.nodes).astype(str)
-        infiltration['suction'] = pd.Series(np.repeat(3.0, len(self.nodes)))
-        infiltration['hyd_con'] = pd.Series(np.repeat(0.5, len(self.nodes)))
-        infiltration['imd_max'] = pd.Series(np.repeat(4, len(self.nodes)))
+        infiltration['suction'] = pd.Series(np.repeat(100.0, len(self.nodes)))
+        infiltration['hyd_con'] = pd.Series(np.repeat(20.0, len(self.nodes)))
+        infiltration['imd_max'] = pd.Series(np.repeat(0.2, len(self.nodes)))
         infiltration = pd.DataFrame.from_dict(infiltration)
         # Manual overrides
         for key, value in kwargs.items():
@@ -295,34 +295,69 @@ class SwmmIngester(object):
         # From here: http://onlinelibrary.wiley.com/doi/10.1002/wrcr.20440/full
         channel_w = self.grid.view(self.acc).copy()
         channel_d = self.grid.view(self.acc).copy()
-        channel_w = 1.5*(a*(w_scale * channel_w)**b) + w_offset
-        channel_d = 1.5*(c*(d_scale * channel_d)**f) + d_offset
+        channel_w = (a*(w_scale * channel_w)**b) + w_offset
+        channel_d = (c*(d_scale * channel_d)**f) + d_offset
         self.channel_w = channel_w
         self.channel_d = channel_d
 
-    def generate_xsections(self, **kwargs):
+    def generate_transects(self, lfactor=1, hfactor=1.5):
+        transect_names = 'T_' + self.conduits['name'].iloc[:-1]
+        nc = "NC\t0.05\t0.05\t0.05"
+        x1 = "X1\t" + transect_names + "\t6\t0\t0\t0\t0\t0\t0\t0\t0"
+        d = pd.Series(self.channel_d.flat[self.startnodes])
+        w = pd.Series(self.channel_w.flat[self.startnodes])
+        zeros = pd.Series(np.repeat(0, len(self.startnodes)))
+        gr = [d + hfactor*d, zeros,
+              d, lfactor*w,
+              zeros, lfactor*w,
+              zeros, lfactor*w + w,
+              d, lfactor*w + w,
+              d + hfactor*d, 2*lfactor*w + w]
+        gr = 'GR\t' + pd.concat([col.astype(str) + '\t' for col in gr], axis=1).sum(axis=1)
+        transects = nc + '\n' + x1 + '\n' + gr + '\n\n'
+        termout = ("NC\t0.05\t0.05\t0.05" + '\n' +
+                   "X1\tT_TERMOUT\t6\t0\t0\t0\t0\t0\t0\t0\t0" + '\n' +
+                   gr.loc[len(gr) - 1])
+        transects = transects.sum()
+        transects = transects + termout
+        self.transects = transects
+
+    def generate_xsections(self, transect=True, **kwargs):
         xsections = {}
         xsections['link'] = self.conduits['name'].iloc[:-1]
-        xsections['shape'] = pd.Series(np.repeat('RECT_OPEN', len(self.startnodes)))
-        xsections['geom_1'] = pd.Series(self.channel_d.flat[self.startnodes])
-        xsections['geom_2'] = pd.Series(self.channel_w.flat[self.startnodes])
-        xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
-        xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
-        xsections['barrels'] = pd.Series(np.repeat(1, len(self.startnodes)))
-        xsections = pd.DataFrame.from_dict(xsections)
-        termout = pd.Series({'link' : 'TERMOUT',
-                             'shape' : 'RECT_OPEN',
-                             'geom_1' : xsections.loc[len(xsections) - 1, 'geom_1'],
-                             'geom_2' : xsections.loc[len(xsections) - 1, 'geom_2'],
-                             'geom_3' : 0,
-                             'geom_4' : 0,
-                             'barrels' : 1}, name=len(xsections))
-        xsections = xsections.append(termout)
-        # Manual overrides
-        for key, value in kwargs.items():
-            xsections[key] = value
-        self.xsections = xsections[['link', 'shape', 'geom_1', 'geom_2',
-                                    'geom_3', 'geom_4', 'barrels']]
+        if transect:
+            xsections['shape'] = pd.Series(np.repeat('IRREGULAR', len(self.startnodes)))
+            xsections['tsect'] = 'T_' + xsections['link']
+            xsections = pd.DataFrame.from_dict(xsections)
+            termout = pd.Series({'link' : 'TERMOUT',
+                                 'shape' : 'IRREGULAR',
+                                 'tsect' : 'T_TERMOUT'}, name=len(xsections))
+            xsections = xsections.append(termout)
+            # Manual overrides
+            for key, value in kwargs.items():
+                xsections[key] = value
+            self.xsections = xsections[['link', 'shape', 'tsect']]
+        else:
+            xsections['shape'] = pd.Series(np.repeat('RECT_OPEN', len(self.startnodes)))
+            xsections['geom_1'] = pd.Series(self.channel_d.flat[self.startnodes])
+            xsections['geom_2'] = pd.Series(self.channel_w.flat[self.startnodes])
+            xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['barrels'] = pd.Series(np.repeat(1, len(self.startnodes)))
+            xsections = pd.DataFrame.from_dict(xsections)
+            termout = pd.Series({'link' : 'TERMOUT',
+                                'shape' : 'RECT_OPEN',
+                                'geom_1' : xsections.loc[len(xsections) - 1, 'geom_1'],
+                                'geom_2' : xsections.loc[len(xsections) - 1, 'geom_2'],
+                                'geom_3' : 0,
+                                'geom_4' : 0,
+                                'barrels' : 1}, name=len(xsections))
+            xsections = xsections.append(termout)
+            # Manual overrides
+            for key, value in kwargs.items():
+                xsections[key] = value
+            self.xsections = xsections[['link', 'shape', 'geom_1', 'geom_2',
+                                        'geom_3', 'geom_4', 'barrels']]
 
     def generate_orifices(self, **kwargs):
         orifices = {}
@@ -516,7 +551,7 @@ class SwmmIngester(object):
                 controls.append(rule)
         self.controls = controls
 
-    def generate_lines(self, **kwargs):
+    def generate_lines(self, transect=True, **kwargs):
         lines = []
         space = None
         justify = None
@@ -579,6 +614,11 @@ class SwmmIngester(object):
         lines.append('\n')
         lines.append(self.xsections.to_csv(sep='\t', header=None, index=None))
         lines.append('\n\n')
+        if transect:
+            lines.append('[TRANSECTS]')
+            lines.append('\n')
+            lines.append(self.transects)
+            lines.append('\n\n')
         lines.append('[TIMESERIES]')
         lines.append('\n')
         lines.append(self.timeseries.to_csv(sep='\t', header=None, index=None))
@@ -602,7 +642,7 @@ class SwmmIngester(object):
         with open(filename, 'w') as outfile:
             outfile.writelines(self.lines)
 
-    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[]):
+    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[], transect=True):
         self.generate_title()
         self.generate_options()
         self.generate_evaporation()
@@ -615,6 +655,8 @@ class SwmmIngester(object):
         self.generate_conduits()
         self.generate_channel_dims()
         self.generate_xsections()
+        if transect:
+            self.generate_transects()
         self.generate_orifices()
         self.generate_outfalls()
         self.generate_timeseries(intensity=intensity)
@@ -626,5 +668,5 @@ class SwmmIngester(object):
         self.generate_map()
         self.generate_control_points(ixes)
         self.generate_controls()
-        self.generate_lines()
+        self.generate_lines(transect=transect)
         self.to_file(out_file)
