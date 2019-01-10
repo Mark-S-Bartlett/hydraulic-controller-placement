@@ -507,7 +507,9 @@ class SwmmIngester(object):
         '''.format(self.grid.shape[1], self.grid.shape[0])
         self.mapconfig = mapconfig
 
-    def generate_control_points(self, ixes, **kwargs):
+    def generate_control_points(self, ixes, transect=True, **kwargs):
+        depths = pd.Series(self.channel_d.flat[self.startnodes], index=self.startnodes)
+        widths = pd.Series(self.channel_w.flat[self.startnodes], index=self.startnodes)
         for ix in ixes:
             b = (self.conduits['inlet_node'] == ('J' + str(ix)))
             original = self.conduits.loc[b].copy()
@@ -534,21 +536,38 @@ class SwmmIngester(object):
             self.orifices = self.orifices.append(orif)
             self.orifices = self.orifices.append(orif2)
             self.orifices = self.orifices.append(orif3)
-            xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                old_xsection['geom_3'], old_xsection['geom_4']], 
-                                index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                name=len(self.xsections))
-            xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                old_xsection['geom_3'], old_xsection['geom_4']], 
-                                index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                name=len(self.xsections))
-            xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                old_xsection['geom_3'], old_xsection['geom_4']], 
-                                index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                name=len(self.xsections))
+            if transect:
+                inletnode = int(old_xsection['link'].split('_')[0].split('J')[1])
+                d = float(depths.loc[inletnode])
+                w = float(widths.loc[inletnode])
+                xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                    'RECT_CLOSED', d, w, 0, 0],
+                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                    name=len(self.xsections))
+                xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                    'RECT_CLOSED', d, w, 0, 0],
+                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                    name=len(self.xsections))
+                xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                    'RECT_CLOSED', d, w, 0, 0],
+                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                    name=len(self.xsections))
+            else:
+                xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                    'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                    old_xsection['geom_3'], old_xsection['geom_4']], 
+                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                    name=len(self.xsections))
+                xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                    'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                    old_xsection['geom_3'], old_xsection['geom_4']], 
+                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                    name=len(self.xsections))
+                xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                    'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                    old_xsection['geom_3'], old_xsection['geom_4']], 
+                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                    name=len(self.xsections))
             self.xsections = self.xsections.append(xsect)
             self.xsections = self.xsections.append(xsect2)
             self.xsections = self.xsections.append(xsect3)
@@ -700,7 +719,7 @@ class SwmmIngester(object):
         self.generate_coordinates()
         self.generate_polygons()
         self.generate_map()
-        self.generate_control_points(ixes)
+        self.generate_control_points(ixes, transect=transect)
         self.generate_controls()
         self.generate_lines(transect=transect)
         self.to_file(out_file)
