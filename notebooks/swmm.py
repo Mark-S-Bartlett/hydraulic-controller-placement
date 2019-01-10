@@ -14,15 +14,31 @@ class SwmmIngester(object):
     """
     Container class for writing SWMM output files
     """
-    def __init__(self, grid_instance, dem, fdir, catch, acc, projection,
+    def __init__(self, grid_instance, dem, fdir, catch, acc, projection, ter=None, cover=None,
                  threshold=100, control=False, initialize=False, node_depths=None,
                  link_flows=None, outlet=472, into_outlet=644):
+        self.covermap = {
+            11 : 0.001,
+            21 : 0.0404,
+            22 : 0.0678,
+            23 : 0.0678,
+            24 : 0.0404,
+            31 : 0.0113,
+            41 : 0.36,
+            42 : 0.32,
+            52 : 0.40,
+            71 : 0.368,
+            81 : 0.325,
+            82 : 0.037
+        }
         self.grid = grid_instance
         self.dem = dem
         self.fdir = fdir
         self.catch = catch
         self.acc = acc
         self.projection = projection
+        self.ter = ter
+        self.cover = cover
         self.control = control
         self.initialize = initialize
         self.in_catch = np.where(grid_instance.mask.ravel())
@@ -76,6 +92,14 @@ class SwmmIngester(object):
             attached_slopes = self.slopes.flat[attached]
             attached_slopes[attached_slopes == 0] = 0.0001
             attached_dists = sp.flat[attached]
+            if self.ter is not None:
+                attached_imperv = self.ter.flat[attached]
+                avg_imperv = np.nanmean(attached_imperv)
+                d[node]['pct_imperv'] = avg_imperv
+            if self.cover is not None:
+                attached_cover = self.cover.flat[attached]
+                avg_n = pd.Series(attached_cover).map(self.covermap).mean()
+                d[node]['avg_n'] = avg_n
             longest_path_dist = attached_dists.max() - attached_dists.min()
             avg_cell_dist = self.dists.flat[attached].mean()
             flow_len = 1 + longest_path_dist * avg_cell_dist
@@ -91,6 +115,16 @@ class SwmmIngester(object):
                                 index=self.nodes)
         self.pct_slopes = pd.Series((d[node]['pct_slope'] for node in self.nodes),
                                     index=self.nodes)
+        if self.ter is not None:
+            self.pct_imperv = pd.Series((d[node]['pct_imperv'] for node in self.nodes),
+                                        index=self.nodes)
+        else:
+            self.pct_imperv = pd.Series(np.repeat(36, len(self.nodes)))
+        if self.cover is not None:
+            self.avg_n = pd.Series((d[node]['avg_n'] for node in self.nodes),
+                                        index=self.nodes)
+        else:
+            self.avg_n = pd.Series(np.repeat(0.1, len(self.nodes)))
         self.startnodes = self.startnodes[self.mask]
         self.endnodes = self.endnodes[self.mask]
         non_outlet = self.startnodes != outlet
@@ -187,7 +221,7 @@ class SwmmIngester(object):
         subcatchments['outlet'] = 'J' + pd.Series(self.nodes).astype(str)
         # TODO: Assuming hectares
         subcatchments['total_area'] = (self.total_areas).values
-        subcatchments['pct_imperv'] = pd.Series(np.repeat(36, len(self.nodes)))
+        subcatchments['pct_imperv'] = self.pct_imperv.values
         subcatchments['width'] = self.widths.values
         subcatchments['pct_slope'] = self.pct_slopes.values
         subcatchments['curb_length'] = pd.Series(np.repeat(0, len(self.nodes)))
@@ -210,7 +244,7 @@ class SwmmIngester(object):
         subareas = {}
         subareas['subcatchment'] = 'S' + pd.Series(self.nodes).astype(str)
         subareas['n_imperv'] = pd.Series(np.repeat(0.01, len(self.nodes)))
-        subareas['n_perv'] = pd.Series(np.repeat(0.1, len(self.nodes)))
+        subareas['n_perv'] = self.avg_n.fillna(0.1).values
         subareas['s_imperv'] = pd.Series(np.repeat(0.05, len(self.nodes)))
         subareas['s_perv'] = pd.Series(np.repeat(0.05, len(self.nodes)))
         subareas['pct_zero'] = pd.Series(np.repeat(25, len(self.nodes)))
