@@ -361,7 +361,7 @@ class SwmmIngester(object):
         xsections['link'] = self.conduits['name'].iloc[:-1]
         if transect:
             xsections['shape'] = pd.Series(np.repeat('IRREGULAR', len(self.startnodes)))
-            xsections['tsect'] = 'T_' + xsections['link']
+            xsections['geom_1'] = 'T_' + xsections['link']
             xsections['geom_2'] = pd.Series(np.repeat(0, len(self.startnodes)))
             xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
             xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
@@ -369,7 +369,7 @@ class SwmmIngester(object):
             xsections = pd.DataFrame.from_dict(xsections)
             termout = pd.Series({'link' : 'TERMOUT',
                                  'shape' : 'IRREGULAR',
-                                 'tsect' : 'T_TERMOUT',
+                                 'geom_1' : 'T_TERMOUT',
                                  'geom_2' : 0,
                                  'geom_3' : 0,
                                  'geom_4' : 0,
@@ -378,7 +378,7 @@ class SwmmIngester(object):
             # Manual overrides
             for key, value in kwargs.items():
                 xsections[key] = value
-            self.xsections = xsections[['link', 'shape', 'tsect', 'geom_2',
+            self.xsections = xsections[['link', 'shape', 'geom_1', 'geom_2',
                                         'geom_3', 'geom_4', 'barrels']]
         else:
             xsections['shape'] = pd.Series(np.repeat('RECT_OPEN', len(self.startnodes)))
