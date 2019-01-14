@@ -438,7 +438,7 @@ class SwmmIngester(object):
             timeseries[key] = value
         self.timeseries = timeseries[['name', 'date', 'time', 'value']]
 
-    def generate_storage_uncontrolled(self, ixes, **kwargs):
+    def generate_storage_uncontrolled(self, ixes, hfactor=1.5, **kwargs):
         storage_uncontrolled = {}
         depths = 4
         init_depths = 0.1
@@ -446,7 +446,7 @@ class SwmmIngester(object):
                         for ix in ixes]
         storage_uncontrolled['name'] = 'ST' + pd.Series(ixes).astype(str)
         storage_uncontrolled['elev'] = self.grid.view(self.dem).flat[storage_ends]
-        storage_uncontrolled['ymax'] = self.channel_d.flat[ixes] + 1
+        storage_uncontrolled['ymax'] = hfactor * self.channel_d.flat[ixes] + self.channel_d.flat[ixes]
         storage_uncontrolled['y0'] = 0
         storage_uncontrolled['Acurve'] = 'FUNCTIONAL'
         storage_uncontrolled['A0'] = self.channel_w.flat[ixes]
@@ -459,7 +459,7 @@ class SwmmIngester(object):
         self.storage_uncontrolled = storage_uncontrolled[['name', 'elev', 'ymax', 'y0', 'Acurve',
                             'A1', 'A2', 'A0']]
 
-    def generate_storage_controlled(self, ixes, **kwargs):
+    def generate_storage_controlled(self, ixes, hfactor=1.5, **kwargs):
         storage_controlled = {}
         depths = 2
         init_depths = 0.1
@@ -467,7 +467,7 @@ class SwmmIngester(object):
                         for ix in ixes]
         storage_controlled['name'] = 'C' + pd.Series(ixes).astype(str)
         storage_controlled['elev'] = self.grid.view(self.dem).flat[storage_ends]
-        storage_controlled['ymax'] = depths
+        storage_controlled['ymax'] = hfactor * self.channel_d.flat[ixes] + self.channel_d.flat[ixes]
         storage_controlled['y0'] = 0
         storage_controlled['Acurve'] = 'FUNCTIONAL'
         storage_controlled['A0'] = 1000
@@ -516,7 +516,7 @@ class SwmmIngester(object):
         '''.format(self.grid.shape[1], self.grid.shape[0])
         self.mapconfig = mapconfig
 
-    def generate_control_points(self, ixes, transect=True, **kwargs):
+    def generate_control_points(self, ixes, transect=True, frac=0.1, **kwargs):
         depths = pd.Series(self.channel_d.flat[self.startnodes], index=self.startnodes)
         widths = pd.Series(self.channel_w.flat[self.startnodes], index=self.startnodes)
         for ix in ixes:
@@ -529,54 +529,99 @@ class SwmmIngester(object):
             self.conduits.loc[b, 'outlet_node'] = storage_node
             b1 = (self.xsections['link'] == original.iloc[0]['name'])
             old_xsection = self.xsections[b1].iloc[0]
+            inletnode = int(old_xsection['link'].split('_')[0].split('J')[1])
+            d = float(depths.loc[inletnode])
+            w = float(widths.loc[inletnode])
             self.xsections.loc[b1, 'link'] = 'J{0}_{1}'.format(ix, storage_node)
-            orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
-                                index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
-                                name=len(self.orifices))
-            orif2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                storage_node, storage_ctrl_node, 'BOTTOM', 0, 0.5], 
-                                index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
-                                name=len(self.orifices))
-            orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                storage_ctrl_node, downstream_node, 'BOTTOM', 0, 0.5], 
-                                index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
-                                name=len(self.orifices))
+            if frac:
+                orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                    storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                    storage_node, storage_ctrl_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                    storage_ctrl_node, downstream_node, 'BOTTOM', (1 - frac)*d, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+            else:
+                orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                    storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                    storage_node, storage_ctrl_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                    storage_ctrl_node, downstream_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
             self.orifices = self.orifices.append(orif)
             self.orifices = self.orifices.append(orif2)
             self.orifices = self.orifices.append(orif3)
             if transect:
-                inletnode = int(old_xsection['link'].split('_')[0].split('J')[1])
-                d = float(depths.loc[inletnode])
-                w = float(widths.loc[inletnode])
-                xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                    'RECT_CLOSED', d, w, 0, 0],
-                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                    name=len(self.xsections))
-                xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                    'RECT_CLOSED', d, w, 0, 0],
-                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                    name=len(self.xsections))
-                xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                    'RECT_CLOSED', d, w, 0, 0],
-                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                    name=len(self.xsections))
+                if frac:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', frac*d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                else:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
             else:
-                xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                    'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                    old_xsection['geom_3'], old_xsection['geom_4']], 
-                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                    name=len(self.xsections))
-                xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                    'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                    old_xsection['geom_3'], old_xsection['geom_4']], 
-                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                    name=len(self.xsections))
-                xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                    'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                    old_xsection['geom_3'], old_xsection['geom_4']], 
-                                    index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                    name=len(self.xsections))
+                if frac:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', frac*old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                else:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
             self.xsections = self.xsections.append(xsect)
             self.xsections = self.xsections.append(xsect2)
             self.xsections = self.xsections.append(xsect3)
