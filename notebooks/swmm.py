@@ -471,7 +471,7 @@ class SwmmIngester(object):
         storage_controlled['y0'] = 0
         storage_controlled['Acurve'] = 'FUNCTIONAL'
         storage_controlled['A0'] = 1000
-        storage_controlled['A1'] = 10000
+        storage_controlled['A1'] = 75000
         storage_controlled['A2'] = 1
         storage_controlled = pd.DataFrame.from_dict(storage_controlled)
         # Manual overrides
@@ -516,7 +516,7 @@ class SwmmIngester(object):
         '''.format(self.grid.shape[1], self.grid.shape[0])
         self.mapconfig = mapconfig
 
-    def generate_control_points(self, ixes, transect=True, frac=0.1, **kwargs):
+    def generate_control_points(self, ixes, transect=True, frac=0.1, position='top', hfactor=1.5, **kwargs):
         depths = pd.Series(self.channel_d.flat[self.startnodes], index=self.startnodes)
         widths = pd.Series(self.channel_w.flat[self.startnodes], index=self.startnodes)
         for ix in ixes:
@@ -533,6 +533,10 @@ class SwmmIngester(object):
             d = float(depths.loc[inletnode])
             w = float(widths.loc[inletnode])
             self.xsections.loc[b1, 'link'] = 'J{0}_{1}'.format(ix, storage_node)
+            if position == 'top':
+                offset = (1 - frac)*d
+            else:
+                offset = 0
             if frac:
                 orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
                                     storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
@@ -543,7 +547,7 @@ class SwmmIngester(object):
                                     index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
                                     name=len(self.orifices))
                 orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                    storage_ctrl_node, downstream_node, 'BOTTOM', (1 - frac)*d, 0.5], 
+                                    storage_ctrl_node, downstream_node, 'BOTTOM', offset, 0.5], 
                                     index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
                                     name=len(self.orifices))
             else:
@@ -565,11 +569,11 @@ class SwmmIngester(object):
             if transect:
                 if frac:
                     xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                        'RECT_CLOSED', d, w, 0, 0],
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
                                         index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
                                         name=len(self.xsections))
                     xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                        'RECT_CLOSED', d, w, 0, 0],
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
                                         index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
                                         name=len(self.xsections))
                     xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
@@ -578,11 +582,11 @@ class SwmmIngester(object):
                                         name=len(self.xsections))
                 else:
                     xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                        'RECT_CLOSED', d, w, 0, 0],
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
                                         index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
                                         name=len(self.xsections))
                     xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                        'RECT_CLOSED', d, w, 0, 0],
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
                                         index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
                                         name=len(self.xsections))
                     xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
@@ -626,7 +630,7 @@ class SwmmIngester(object):
             self.xsections = self.xsections.append(xsect2)
             self.xsections = self.xsections.append(xsect3)
 
-    def generate_controls(self, **kwargs):
+    def generate_controls(self, frac_open=0, **kwargs):
         controls = []
         if self.control:
             for i, orifice in enumerate(self.orifices['name'].values):
@@ -636,7 +640,7 @@ class SwmmIngester(object):
                 elif node1.startswith('ST') and node2.startswith('J'):
                     status = 0
                 elif node1.startswith('C') and node2.startswith('J'):
-                    status = 0
+                    status = frac_open
                 else:
                     raise ValueError()
                 rule = ('RULE R{0}\nIF SIMULATION TIME > 0\nTHEN ORIFICE {1} SETTING = {2}\n\n'
@@ -749,7 +753,7 @@ class SwmmIngester(object):
         with open(filename, 'w') as outfile:
             outfile.writelines(self.lines)
 
-    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[], transect=True):
+    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[], transect=True, position='top', frac_open=0):
         self.generate_title()
         self.generate_options()
         self.generate_evaporation()
@@ -773,7 +777,7 @@ class SwmmIngester(object):
         self.generate_coordinates()
         self.generate_polygons()
         self.generate_map()
-        self.generate_control_points(ixes, transect=transect)
-        self.generate_controls()
+        self.generate_control_points(ixes, transect=transect, position=position)
+        self.generate_controls(frac_open=frac_open)
         self.generate_lines(transect=transect)
         self.to_file(out_file)
