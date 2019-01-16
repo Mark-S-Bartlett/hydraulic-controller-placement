@@ -214,14 +214,17 @@ class SwmmIngester(object):
         self.raingages = raingages[['name', 'rain_type', 'time_interval',
                                     'snow_catch', 'data_source']]
 
-    def generate_subcatchments(self, **kwargs):
+    def generate_subcatchments(self, uniform_imperv=0, **kwargs):
         subcatchments = {}
         subcatchments['name'] = 'S' + pd.Series(self.nodes).astype(str)
         subcatchments['raingage'] = pd.Series(np.repeat('R0', len(self.nodes)))
         subcatchments['outlet'] = 'J' + pd.Series(self.nodes).astype(str)
         # TODO: Assuming hectares
         subcatchments['total_area'] = (self.total_areas).values
-        subcatchments['pct_imperv'] = self.pct_imperv.values
+        if uniform_imperv:
+            subcatchments['pct_imperv'] = pd.Series(np.repeat(uniform_imperv, len(self.nodes)))
+        else:
+            subcatchments['pct_imperv'] = self.pct_imperv.values
         subcatchments['width'] = self.widths.values
         subcatchments['pct_slope'] = self.pct_slopes.values
         subcatchments['curb_length'] = pd.Series(np.repeat(0, len(self.nodes)))
@@ -240,11 +243,14 @@ class SwmmIngester(object):
                                             'pct_imperv', 'width', 'pct_slope',
                                             'curb_length', 'snow_pack']]
 
-    def generate_subareas(self, **kwargs):
+    def generate_subareas(self, uniform_n=0, **kwargs):
         subareas = {}
         subareas['subcatchment'] = 'S' + pd.Series(self.nodes).astype(str)
         subareas['n_imperv'] = pd.Series(np.repeat(0.01, len(self.nodes)))
-        subareas['n_perv'] = self.avg_n.fillna(0.1).values
+        if uniform_n:
+            subareas['n_perv'] = pd.Series(np.repeat(uniform_n, len(self.nodes)))
+        else:
+            subareas['n_perv'] = self.avg_n.fillna(0.1).values
         subareas['s_imperv'] = pd.Series(np.repeat(0.05, len(self.nodes)))
         subareas['s_perv'] = pd.Series(np.repeat(0.05, len(self.nodes)))
         subareas['pct_zero'] = pd.Series(np.repeat(25, len(self.nodes)))
@@ -753,14 +759,14 @@ class SwmmIngester(object):
         with open(filename, 'w') as outfile:
             outfile.writelines(self.lines)
 
-    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[], transect=True, position='top', frac_open=0):
+    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[], transect=True, position='top', frac_open=0, uniform_n=0, uniform_imperv=0):
         self.generate_title()
         self.generate_options()
         self.generate_evaporation()
         self.generate_report()
         self.generate_raingages()
-        self.generate_subcatchments()
-        self.generate_subareas()
+        self.generate_subcatchments(uniform_imperv=uniform_imperv)
+        self.generate_subareas(uniform_n=uniform_n)
         self.generate_infiltration()
         self.generate_junctions()
         self.generate_conduits()
