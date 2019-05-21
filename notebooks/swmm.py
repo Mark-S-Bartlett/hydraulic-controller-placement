@@ -14,15 +14,31 @@ class SwmmIngester(object):
     """
     Container class for writing SWMM output files
     """
-    def __init__(self, grid_instance, dem, fdir, catch, acc, projection,
+    def __init__(self, grid_instance, dem, fdir, catch, acc, projection, ter=None, cover=None,
                  threshold=100, control=False, initialize=False, node_depths=None,
                  link_flows=None, outlet=472, into_outlet=644):
+        self.covermap = {
+            11 : 0.001,
+            21 : 0.0404,
+            22 : 0.0678,
+            23 : 0.0678,
+            24 : 0.0404,
+            31 : 0.0113,
+            41 : 0.36,
+            42 : 0.32,
+            52 : 0.40,
+            71 : 0.368,
+            81 : 0.325,
+            82 : 0.037
+        }
         self.grid = grid_instance
         self.dem = dem
         self.fdir = fdir
         self.catch = catch
         self.acc = acc
         self.projection = projection
+        self.ter = ter
+        self.cover = cover
         self.control = control
         self.initialize = initialize
         self.in_catch = np.where(grid_instance.mask.ravel())
@@ -76,6 +92,14 @@ class SwmmIngester(object):
             attached_slopes = self.slopes.flat[attached]
             attached_slopes[attached_slopes == 0] = 0.0001
             attached_dists = sp.flat[attached]
+            if self.ter is not None:
+                attached_imperv = self.ter.flat[attached]
+                avg_imperv = np.nanmean(attached_imperv)
+                d[node]['pct_imperv'] = avg_imperv
+            if self.cover is not None:
+                attached_cover = self.cover.flat[attached]
+                avg_n = pd.Series(attached_cover).map(self.covermap).mean()
+                d[node]['avg_n'] = avg_n
             longest_path_dist = attached_dists.max() - attached_dists.min()
             avg_cell_dist = self.dists.flat[attached].mean()
             flow_len = 1 + longest_path_dist * avg_cell_dist
@@ -91,6 +115,16 @@ class SwmmIngester(object):
                                 index=self.nodes)
         self.pct_slopes = pd.Series((d[node]['pct_slope'] for node in self.nodes),
                                     index=self.nodes)
+        if self.ter is not None:
+            self.pct_imperv = pd.Series((d[node]['pct_imperv'] for node in self.nodes),
+                                        index=self.nodes)
+        else:
+            self.pct_imperv = pd.Series(np.repeat(36, len(self.nodes)))
+        if self.cover is not None:
+            self.avg_n = pd.Series((d[node]['avg_n'] for node in self.nodes),
+                                        index=self.nodes)
+        else:
+            self.avg_n = pd.Series(np.repeat(0.1, len(self.nodes)))
         self.startnodes = self.startnodes[self.mask]
         self.endnodes = self.endnodes[self.mask]
         non_outlet = self.startnodes != outlet
@@ -120,11 +154,11 @@ class SwmmIngester(object):
             "DRY_STEP" : "00:05:00",
             "ROUTING_STEP" : "5",
             "ALLOW_PONDING" : "YES",
-            "INERTIAL_DAMPING" : "NONE",
+            "INERTIAL_DAMPING" : "PARTIAL",
             "VARIABLE_STEP" : "0.75",
-            "LENGTHENING_STEP" : "5",
-            "MIN_SURFAREA" : "0",
-            "NORMAL_FLOW_LIMITED" : "SLOPE",
+            "LENGTHENING_STEP" : "0",
+            "MIN_SURFAREA" : "1.167",
+            "NORMAL_FLOW_LIMITED" : "BOTH",
             "SKIP_STEADY_STATE" : "NO",
             "FORCE_MAIN_EQUATION" : "H-W",
             "LINK_OFFSETS" : "DEPTH",
@@ -132,11 +166,11 @@ class SwmmIngester(object):
             "IGNORE_SNOWMELT" : "YES",
             "IGNORE_GROUNDWATER" : "YES",
             "MAX_TRIALS" : "8",
-            "HEAD_TOLERANCE" : "0.005",
+            "HEAD_TOLERANCE" : "0.0015",
             "SYS_FLOW_TOL" : "5",
             "LAT_FLOW_TOL" : "5",
             "MINIMUM_STEP" : "0.5",
-            "THREADS" : "1",
+            "THREADS" : "2",
         }
         # Manual overrides
         for key, value in kwargs.items():
@@ -180,14 +214,17 @@ class SwmmIngester(object):
         self.raingages = raingages[['name', 'rain_type', 'time_interval',
                                     'snow_catch', 'data_source']]
 
-    def generate_subcatchments(self, **kwargs):
+    def generate_subcatchments(self, uniform_imperv=0, **kwargs):
         subcatchments = {}
         subcatchments['name'] = 'S' + pd.Series(self.nodes).astype(str)
         subcatchments['raingage'] = pd.Series(np.repeat('R0', len(self.nodes)))
         subcatchments['outlet'] = 'J' + pd.Series(self.nodes).astype(str)
         # TODO: Assuming hectares
         subcatchments['total_area'] = (self.total_areas).values
-        subcatchments['pct_imperv'] = pd.Series(np.repeat(100, len(self.nodes)))
+        if uniform_imperv:
+            subcatchments['pct_imperv'] = pd.Series(np.repeat(uniform_imperv, len(self.nodes)))
+        else:
+            subcatchments['pct_imperv'] = self.pct_imperv.values
         subcatchments['width'] = self.widths.values
         subcatchments['pct_slope'] = self.pct_slopes.values
         subcatchments['curb_length'] = pd.Series(np.repeat(0, len(self.nodes)))
@@ -206,11 +243,14 @@ class SwmmIngester(object):
                                             'pct_imperv', 'width', 'pct_slope',
                                             'curb_length', 'snow_pack']]
 
-    def generate_subareas(self, **kwargs):
+    def generate_subareas(self, uniform_n=0, **kwargs):
         subareas = {}
         subareas['subcatchment'] = 'S' + pd.Series(self.nodes).astype(str)
         subareas['n_imperv'] = pd.Series(np.repeat(0.01, len(self.nodes)))
-        subareas['n_perv'] = pd.Series(np.repeat(0.1, len(self.nodes)))
+        if uniform_n:
+            subareas['n_perv'] = pd.Series(np.repeat(uniform_n, len(self.nodes)))
+        else:
+            subareas['n_perv'] = self.avg_n.fillna(0.1).values
         subareas['s_imperv'] = pd.Series(np.repeat(0.05, len(self.nodes)))
         subareas['s_perv'] = pd.Series(np.repeat(0.05, len(self.nodes)))
         subareas['pct_zero'] = pd.Series(np.repeat(25, len(self.nodes)))
@@ -226,9 +266,9 @@ class SwmmIngester(object):
     def generate_infiltration(self, **kwargs):
         infiltration = {}
         infiltration['subcatchment'] = 'S' + pd.Series(self.nodes).astype(str)
-        infiltration['suction'] = pd.Series(np.repeat(3.0, len(self.nodes)))
-        infiltration['hyd_con'] = pd.Series(np.repeat(0.5, len(self.nodes)))
-        infiltration['imd_max'] = pd.Series(np.repeat(4, len(self.nodes)))
+        infiltration['suction'] = pd.Series(np.repeat(100.0, len(self.nodes)))
+        infiltration['hyd_con'] = pd.Series(np.repeat(20.0, len(self.nodes)))
+        infiltration['imd_max'] = pd.Series(np.repeat(0.2, len(self.nodes)))
         infiltration = pd.DataFrame.from_dict(infiltration)
         # Manual overrides
         for key, value in kwargs.items():
@@ -290,7 +330,7 @@ class SwmmIngester(object):
                                   'mannings_n', 'inlet_offset', 'outlet_offset',
                                   'init_flow', 'max_flow']]
 
-    def generate_channel_dims(self, a=7.2, b=0.5, c=0.5, f=0.3, d_offset=1.1, w_offset=0.3,
+    def generate_channel_dims(self, a=7.2, b=0.5, c=0.5, f=0.3, d_offset=1.1, w_offset=1.3,
                      d_scale=1/5000, w_scale=1/5000, **kwargs):
         # From here: http://onlinelibrary.wiley.com/doi/10.1002/wrcr.20440/full
         channel_w = self.grid.view(self.acc).copy()
@@ -300,29 +340,73 @@ class SwmmIngester(object):
         self.channel_w = channel_w
         self.channel_d = channel_d
 
-    def generate_xsections(self, **kwargs):
+    def generate_transects(self, lfactor=1, hfactor=1.5):
+        transect_names = 'T_' + self.conduits['name'].iloc[:-1]
+        nc = "NC\t0.05\t0.05\t0.05"
+        x1 = "X1\t" + transect_names + "\t6\t0\t0\t0\t0\t0\t0\t0\t0"
+        d = pd.Series(self.channel_d.flat[self.startnodes])
+        w = pd.Series(self.channel_w.flat[self.startnodes])
+        zeros = pd.Series(np.repeat(0, len(self.startnodes)))
+        gr = [d + hfactor*d, zeros,
+              d, lfactor*w,
+              zeros, lfactor*w,
+              zeros, lfactor*w + w,
+              d, lfactor*w + w,
+              d + hfactor*d, 2*lfactor*w + w]
+        gr = 'GR\t' + pd.concat([col.astype(str) + '\t' for col in gr], axis=1).sum(axis=1)
+        transects = nc + '\n' + x1 + '\n' + gr + '\n\n'
+        termout = ("NC\t0.05\t0.05\t0.05" + '\n' +
+                   "X1\tT_TERMOUT\t6\t0\t0\t0\t0\t0\t0\t0\t0" + '\n' +
+                   gr.loc[len(gr) - 1])
+        transects = transects.sum()
+        transects = transects + termout
+        self.transects = transects
+
+    def generate_xsections(self, transect=True, **kwargs):
         xsections = {}
         xsections['link'] = self.conduits['name'].iloc[:-1]
-        xsections['shape'] = pd.Series(np.repeat('RECT_OPEN', len(self.startnodes)))
-        xsections['geom_1'] = pd.Series(self.channel_w.flat[self.startnodes])
-        xsections['geom_2'] = pd.Series(self.channel_d.flat[self.startnodes])
-        xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
-        xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
-        xsections['barrels'] = pd.Series(np.repeat(1, len(self.startnodes)))
-        xsections = pd.DataFrame.from_dict(xsections)
-        termout = pd.Series({'link' : 'TERMOUT',
-                             'shape' : 'RECT_OPEN',
-                             'geom_1' : xsections.loc[len(xsections) - 1, 'geom_1'],
-                             'geom_2' : xsections.loc[len(xsections) - 1, 'geom_2'],
-                             'geom_3' : 0,
-                             'geom_4' : 0,
-                             'barrels' : 1}, name=len(xsections))
-        xsections = xsections.append(termout)
-        # Manual overrides
-        for key, value in kwargs.items():
-            xsections[key] = value
-        self.xsections = xsections[['link', 'shape', 'geom_1', 'geom_2',
-                                    'geom_3', 'geom_4', 'barrels']]
+        if transect:
+            xsections['shape'] = pd.Series(np.repeat('IRREGULAR', len(self.startnodes)))
+            xsections['geom_1'] = 'T_' + xsections['link']
+            xsections['geom_2'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['barrels'] = pd.Series(np.repeat(1, len(self.startnodes)))
+            xsections = pd.DataFrame.from_dict(xsections)
+            termout = pd.Series({'link' : 'TERMOUT',
+                                 'shape' : 'IRREGULAR',
+                                 'geom_1' : 'T_TERMOUT',
+                                 'geom_2' : 0,
+                                 'geom_3' : 0,
+                                 'geom_4' : 0,
+                                 'barrels' : 1}, name=len(xsections))
+            xsections = xsections.append(termout)
+            # Manual overrides
+            for key, value in kwargs.items():
+                xsections[key] = value
+            self.xsections = xsections[['link', 'shape', 'geom_1', 'geom_2',
+                                        'geom_3', 'geom_4', 'barrels']]
+        else:
+            xsections['shape'] = pd.Series(np.repeat('RECT_OPEN', len(self.startnodes)))
+            xsections['geom_1'] = pd.Series(self.channel_d.flat[self.startnodes])
+            xsections['geom_2'] = pd.Series(self.channel_w.flat[self.startnodes])
+            xsections['geom_3'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['geom_4'] = pd.Series(np.repeat(0, len(self.startnodes)))
+            xsections['barrels'] = pd.Series(np.repeat(1, len(self.startnodes)))
+            xsections = pd.DataFrame.from_dict(xsections)
+            termout = pd.Series({'link' : 'TERMOUT',
+                                'shape' : 'RECT_OPEN',
+                                'geom_1' : xsections.loc[len(xsections) - 1, 'geom_1'],
+                                'geom_2' : xsections.loc[len(xsections) - 1, 'geom_2'],
+                                'geom_3' : 0,
+                                'geom_4' : 0,
+                                'barrels' : 1}, name=len(xsections))
+            xsections = xsections.append(termout)
+            # Manual overrides
+            for key, value in kwargs.items():
+                xsections[key] = value
+            self.xsections = xsections[['link', 'shape', 'geom_1', 'geom_2',
+                                        'geom_3', 'geom_4', 'barrels']]
 
     def generate_orifices(self, **kwargs):
         orifices = {}
@@ -360,7 +444,7 @@ class SwmmIngester(object):
             timeseries[key] = value
         self.timeseries = timeseries[['name', 'date', 'time', 'value']]
 
-    def generate_storage_uncontrolled(self, ixes, **kwargs):
+    def generate_storage_uncontrolled(self, ixes, hfactor=1.5, **kwargs):
         storage_uncontrolled = {}
         depths = 4
         init_depths = 0.1
@@ -368,7 +452,7 @@ class SwmmIngester(object):
                         for ix in ixes]
         storage_uncontrolled['name'] = 'ST' + pd.Series(ixes).astype(str)
         storage_uncontrolled['elev'] = self.grid.view(self.dem).flat[storage_ends]
-        storage_uncontrolled['ymax'] = self.channel_d.flat[ixes] + 1
+        storage_uncontrolled['ymax'] = hfactor * self.channel_d.flat[ixes] + self.channel_d.flat[ixes]
         storage_uncontrolled['y0'] = 0
         storage_uncontrolled['Acurve'] = 'FUNCTIONAL'
         storage_uncontrolled['A0'] = self.channel_w.flat[ixes]
@@ -381,7 +465,7 @@ class SwmmIngester(object):
         self.storage_uncontrolled = storage_uncontrolled[['name', 'elev', 'ymax', 'y0', 'Acurve',
                             'A1', 'A2', 'A0']]
 
-    def generate_storage_controlled(self, ixes, **kwargs):
+    def generate_storage_controlled(self, ixes, hfactor=1.5, **kwargs):
         storage_controlled = {}
         depths = 2
         init_depths = 0.1
@@ -389,11 +473,11 @@ class SwmmIngester(object):
                         for ix in ixes]
         storage_controlled['name'] = 'C' + pd.Series(ixes).astype(str)
         storage_controlled['elev'] = self.grid.view(self.dem).flat[storage_ends]
-        storage_controlled['ymax'] = depths
+        storage_controlled['ymax'] = hfactor * self.channel_d.flat[ixes] + self.channel_d.flat[ixes]
         storage_controlled['y0'] = 0
         storage_controlled['Acurve'] = 'FUNCTIONAL'
         storage_controlled['A0'] = 1000
-        storage_controlled['A1'] = 10000
+        storage_controlled['A1'] = 75000
         storage_controlled['A2'] = 1
         storage_controlled = pd.DataFrame.from_dict(storage_controlled)
         # Manual overrides
@@ -411,8 +495,8 @@ class SwmmIngester(object):
         coordinates = {}
         coordinates['node'] = pd.concat([self.junctions['name'], self.storage['name']])
         coord_ix = coordinates['node'].str.extract('(\d+)').astype(int).values
-        coordinates['x_coord'] = np.unravel_index(coord_ix, self.grid.shape)[1]
-        coordinates['y_coord'] = np.unravel_index(coord_ix, self.grid.shape)[0]
+        coordinates['x_coord'] = np.unravel_index(coord_ix, self.grid.shape)[1].ravel()
+        coordinates['y_coord'] = np.unravel_index(coord_ix, self.grid.shape)[0].ravel()
         coordinates = pd.DataFrame.from_dict(coordinates)
         # Manual overrides
         for key, value in kwargs.items():
@@ -438,7 +522,9 @@ class SwmmIngester(object):
         '''.format(self.grid.shape[1], self.grid.shape[0])
         self.mapconfig = mapconfig
 
-    def generate_control_points(self, ixes, **kwargs):
+    def generate_control_points(self, ixes, transect=True, frac=0.1, position='top', hfactor=1.5, **kwargs):
+        depths = pd.Series(self.channel_d.flat[self.startnodes], index=self.startnodes)
+        widths = pd.Series(self.channel_w.flat[self.startnodes], index=self.startnodes)
         for ix in ixes:
             b = (self.conduits['inlet_node'] == ('J' + str(ix)))
             original = self.conduits.loc[b].copy()
@@ -449,42 +535,108 @@ class SwmmIngester(object):
             self.conduits.loc[b, 'outlet_node'] = storage_node
             b1 = (self.xsections['link'] == original.iloc[0]['name'])
             old_xsection = self.xsections[b1].iloc[0]
+            inletnode = int(old_xsection['link'].split('_')[0].split('J')[1])
+            d = float(depths.loc[inletnode])
+            w = float(widths.loc[inletnode])
             self.xsections.loc[b1, 'link'] = 'J{0}_{1}'.format(ix, storage_node)
-            orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
-                                index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
-                                name=len(self.orifices))
-            orif2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                storage_node, storage_ctrl_node, 'BOTTOM', 0, 0.5], 
-                                index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
-                                name=len(self.orifices))
-            orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                storage_ctrl_node, downstream_node, 'BOTTOM', 0, 0.5], 
-                                index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
-                                name=len(self.orifices))
+            if position == 'top':
+                offset = (1 - frac)*d
+            else:
+                offset = 0
+            if frac:
+                orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                    storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                    storage_node, storage_ctrl_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                    storage_ctrl_node, downstream_node, 'BOTTOM', offset, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+            else:
+                orif = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                    storage_node, downstream_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                    storage_node, storage_ctrl_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
+                orif3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                    storage_ctrl_node, downstream_node, 'BOTTOM', 0, 0.5], 
+                                    index=['name', 'node1', 'node2', 'type', 'offset', 'cd'],
+                                    name=len(self.orifices))
             self.orifices = self.orifices.append(orif)
             self.orifices = self.orifices.append(orif2)
             self.orifices = self.orifices.append(orif3)
-            xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
-                                'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                old_xsection['geom_3'], old_xsection['geom_4']], 
-                                index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                name=len(self.xsections))
-            xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
-                                'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                old_xsection['geom_3'], old_xsection['geom_4']], 
-                                index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                name=len(self.xsections))
-            xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
-                                'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
-                                old_xsection['geom_3'], old_xsection['geom_4']], 
-                                index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
-                                name=len(self.xsections))
+            if transect:
+                if frac:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', frac*d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                else:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', d + hfactor*d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', d, w, 0, 0],
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+            else:
+                if frac:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', frac*old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                else:
+                    xsect = pd.Series(['{0}_{1}'.format(storage_node, downstream_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect2 = pd.Series(['{0}_{1}'.format(storage_node, storage_ctrl_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
+                    xsect3 = pd.Series(['{0}_{1}'.format(storage_ctrl_node, downstream_node),
+                                        'RECT_CLOSED', old_xsection['geom_1'], old_xsection['geom_2'],
+                                        old_xsection['geom_3'], old_xsection['geom_4']], 
+                                        index=['link', 'shape', 'geom_1', 'geom_2', 'geom_3', 'geom_4'],
+                                        name=len(self.xsections))
             self.xsections = self.xsections.append(xsect)
             self.xsections = self.xsections.append(xsect2)
             self.xsections = self.xsections.append(xsect3)
 
-    def generate_controls(self, **kwargs):
+    def generate_controls(self, frac_open=0, **kwargs):
         controls = []
         if self.control:
             for i, orifice in enumerate(self.orifices['name'].values):
@@ -494,7 +646,7 @@ class SwmmIngester(object):
                 elif node1.startswith('ST') and node2.startswith('J'):
                     status = 0
                 elif node1.startswith('C') and node2.startswith('J'):
-                    status = 0
+                    status = frac_open
                 else:
                     raise ValueError()
                 rule = ('RULE R{0}\nIF SIMULATION TIME > 0\nTHEN ORIFICE {1} SETTING = {2}\n\n'
@@ -516,7 +668,7 @@ class SwmmIngester(object):
                 controls.append(rule)
         self.controls = controls
 
-    def generate_lines(self, **kwargs):
+    def generate_lines(self, transect=True, **kwargs):
         lines = []
         space = None
         justify = None
@@ -579,6 +731,11 @@ class SwmmIngester(object):
         lines.append('\n')
         lines.append(self.xsections.to_csv(sep='\t', header=None, index=None))
         lines.append('\n\n')
+        if transect:
+            lines.append('[TRANSECTS]')
+            lines.append('\n')
+            lines.append(self.transects)
+            lines.append('\n\n')
         lines.append('[TIMESERIES]')
         lines.append('\n')
         lines.append(self.timeseries.to_csv(sep='\t', header=None, index=None))
@@ -602,19 +759,21 @@ class SwmmIngester(object):
         with open(filename, 'w') as outfile:
             outfile.writelines(self.lines)
 
-    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[]):
+    def run_swmm_ingester(self, out_file, outlet, into_outlet, intensity=1.5, ixes=[], transect=True, position='top', frac_open=0, uniform_n=0, uniform_imperv=0):
         self.generate_title()
         self.generate_options()
         self.generate_evaporation()
         self.generate_report()
         self.generate_raingages()
-        self.generate_subcatchments()
-        self.generate_subareas()
+        self.generate_subcatchments(uniform_imperv=uniform_imperv)
+        self.generate_subareas(uniform_n=uniform_n)
         self.generate_infiltration()
         self.generate_junctions()
         self.generate_conduits()
         self.generate_channel_dims()
         self.generate_xsections()
+        if transect:
+            self.generate_transects()
         self.generate_orifices()
         self.generate_outfalls()
         self.generate_timeseries(intensity=intensity)
@@ -624,7 +783,7 @@ class SwmmIngester(object):
         self.generate_coordinates()
         self.generate_polygons()
         self.generate_map()
-        self.generate_control_points(ixes)
-        self.generate_controls()
-        self.generate_lines()
+        self.generate_control_points(ixes, transect=transect, position=position)
+        self.generate_controls(frac_open=frac_open)
+        self.generate_lines(transect=transect)
         self.to_file(out_file)
